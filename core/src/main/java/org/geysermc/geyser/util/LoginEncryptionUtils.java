@@ -197,7 +197,7 @@ public class LoginEncryptionUtils {
         return (form, genericResult) -> {
             if (genericResult instanceof ValidFormResponseResult<SimpleFormResponse> result &&
                     result.response().clickedButtonId() == 0) {
-                session.authenticateWithMicrosoftCode(false);
+                session.authenticateWithMicrosoftCode(true);
             } else {
                 session.disconnect("%disconnect.quitting");
             }
