@@ -50,6 +50,7 @@ import javax.crypto.SecretKey;
 import java.security.KeyPair;
 import java.security.PublicKey;
 import java.util.List;
+import java.util.UUID;
 import java.util.function.BiConsumer;
 
 public class LoginEncryptionUtils {
@@ -70,23 +71,26 @@ public class LoginEncryptionUtils {
             geyser.getLogger().debug(String.format("Is player data signed? %s", result.signed()));
 
             if (!result.signed() && !session.getGeyser().getConfig().isEnableProxyConnections()) {
-                session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
+                geyser.getLogger().warning("Skipping xbox verification...");
+                //session.disconnect(GeyserLocale.getLocaleStringLog("geyser.network.remote.invalid_xbox_account"));
                 return;
             }
 
             IdentityData extraData = result.identityClaims().extraData;
-            session.setAuthenticationData(new AuthData(extraData.displayName, extraData.identity, extraData.xuid));
+            session.setAuthenticationData(new AuthData(extraData.displayName, extraData.identity, String.valueOf(UUID.nameUUIDFromBytes(extraData.displayName.getBytes()).getLeastSignificantBits())));
             session.setCertChainData(certChainData);
 
             PublicKey identityPublicKey = result.identityClaims().parsedIdentityPublicKey();
 
             byte[] clientDataPayload = EncryptionUtils.verifyClientData(clientData, identityPublicKey);
+
             if (clientDataPayload == null) {
                 throw new IllegalStateException("Client data isn't signed by the given chain data");
             }
 
             JsonNode clientDataJson = JSON_MAPPER.readTree(clientDataPayload);
             BedrockClientData data = JSON_MAPPER.convertValue(clientDataJson, BedrockClientData.class);
+
             data.setOriginalString(clientData);
             session.setClientData(data);
 
@@ -193,7 +197,7 @@ public class LoginEncryptionUtils {
         return (form, genericResult) -> {
             if (genericResult instanceof ValidFormResponseResult<SimpleFormResponse> result &&
                     result.response().clickedButtonId() == 0) {
-                session.authenticateWithMicrosoftCode(true);
+                session.authenticateWithMicrosoftCode(false);
             } else {
                 session.disconnect("%disconnect.quitting");
             }

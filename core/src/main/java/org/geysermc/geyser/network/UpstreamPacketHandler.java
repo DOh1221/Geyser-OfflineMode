@@ -25,7 +25,10 @@
 
 package org.geysermc.geyser.network;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.netty.buffer.Unpooled;
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.cloudburstmc.math.vector.Vector2f;
 import org.cloudburstmc.protocol.bedrock.BedrockDisconnectReasons;
 import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec;
@@ -49,6 +52,8 @@ import org.cloudburstmc.protocol.bedrock.packet.ResourcePackDataInfoPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ResourcePackStackPacket;
 import org.cloudburstmc.protocol.bedrock.packet.ResourcePacksInfoPacket;
 import org.cloudburstmc.protocol.bedrock.packet.SetTitlePacket;
+import org.cloudburstmc.protocol.bedrock.util.ChainValidationResult;
+import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils;
 import org.cloudburstmc.protocol.common.PacketSignal;
 import org.cloudburstmc.protocol.common.util.Zlib;
 import org.geysermc.geyser.Constants;
@@ -64,20 +69,25 @@ import org.geysermc.geyser.registry.BlockRegistries;
 import org.geysermc.geyser.registry.Registries;
 import org.geysermc.geyser.session.GeyserSession;
 import org.geysermc.geyser.session.PendingMicrosoftAuthentication;
+import org.geysermc.geyser.session.auth.AuthData;
+import org.geysermc.geyser.session.auth.BedrockClientData;
 import org.geysermc.geyser.text.GeyserLocale;
-import org.geysermc.geyser.util.LoginEncryptionUtils;
 import org.geysermc.geyser.util.MathUtils;
 import org.geysermc.geyser.util.VersionCheckUtils;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
+import java.security.PublicKey;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.OptionalInt;
 import java.util.UUID;
 
+import static org.geysermc.geyser.GeyserImpl.JSON_MAPPER;
+
+@Slf4j
 public class UpstreamPacketHandler extends LoggingPacketHandler {
 
     private boolean networkSettingsRequested = false;
@@ -166,6 +176,7 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         return PacketSignal.HANDLED;
     }
 
+    @SneakyThrows
     @Override
     public PacketSignal handle(LoginPacket loginPacket) {
         if (geyser.isShuttingDown() || geyser.isReloading()) {
@@ -183,7 +194,27 @@ public class UpstreamPacketHandler extends LoggingPacketHandler {
         session.setBlockMappings(BlockRegistries.BLOCKS.forVersion(loginPacket.getProtocolVersion()));
         session.setItemMappings(Registries.ITEMS.forVersion(loginPacket.getProtocolVersion()));
 
-        LoginEncryptionUtils.encryptPlayerConnection(session, loginPacket);
+        //idk why but this shit don't work properly in ext static method
+        //LoginEncryptionUtils.encryptPlayerConnection(session, loginPacket);
+        ChainValidationResult result = EncryptionUtils.validateChain(loginPacket.getChain());
+
+        ChainValidationResult.IdentityData extraData = result.identityClaims().extraData;
+        session.setAuthenticationData(new AuthData(extraData.displayName, extraData.identity, String.valueOf(UUID.nameUUIDFromBytes(extraData.displayName.getBytes()).getLeastSignificantBits())));
+        session.setCertChainData(loginPacket.getChain());
+
+        PublicKey identityPublicKey = result.identityClaims().parsedIdentityPublicKey();
+
+        byte[] clientDataPayload = EncryptionUtils.verifyClientData(loginPacket.getExtra(), identityPublicKey);
+
+        if (clientDataPayload == null) {
+            throw new IllegalStateException("Client data isn't signed by the given chain data");
+        }
+
+        JsonNode clientDataJson = JSON_MAPPER.readTree(clientDataPayload);
+        BedrockClientData data = JSON_MAPPER.convertValue(clientDataJson, BedrockClientData.class);
+
+        data.setOriginalString(loginPacket.getExtra());
+        session.setClientData(data);
 
         if (session.isClosed()) {
             // Can happen if Xbox validation fails
